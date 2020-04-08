@@ -21,7 +21,7 @@
 
 AC_PREREQ([2.69])
 AC_INIT([cpuprocanalyzer], [1.0], [SaiSuneel_Marri@comcast.com])
-AC_CONFIG_MACRO_DIR([cfg])
+AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_AUX_DIR([cfg])
 AM_INIT_AUTOMAKE([subdir-objects foreign no-dist-gzip dist-bzip2 1.9])
 
