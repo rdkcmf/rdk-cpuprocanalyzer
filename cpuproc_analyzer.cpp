@@ -646,7 +646,7 @@ void LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic
                     }
 
                     int i=0;
-                    while(char_array!='\0')
+                    while(char_array[i] != '\0')
                     {
                         if(char_array[i]== '/')
                         {
