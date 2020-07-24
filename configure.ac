@@ -41,6 +41,23 @@ AC_PROG_MAKE_SET
 AC_CHECK_HEADERS([stdlib.h unistd.h])
 #PKG_CHECK_MODULES([GLIB], [glib-2.0 >= 2.24.0])
 
+# broadband
+PROCANALYZER_BROADBAND=" "
+AC_ARG_ENABLE([procanalyzer-broadband],
+        AS_HELP_STRING([--enable-procanalyzer-broadband],[This will decide broadband or video device]),
+        [
+          case "${enableval}" in
+           yes) PROCANALYZER_BROADBAND=true ;; 
+           no) PROCANALYZER_BROADBAND=false 
+                echo "Video Device ";;
+          *) AC_MSG_ERROR([bad value ${enableval} for --enable-procanalyzer-broadband]) ;;
+           esac
+           ],
+         [echo " broadband device"])
+AM_CONDITIONAL([PROCANALYZER_BROADBAND], [test x$PROCANALYZER_BROADBAND = xtrue])
+
+AC_SUBST(PROCANALYZER_BROADBAND)
+
 AC_CONFIG_FILES([Makefile])
 
 AC_OUTPUT

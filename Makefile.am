@@ -21,5 +21,8 @@ SUBDIRS =
 bin_PROGRAMS = cpuprocanalyzer
 cpuprocanalyzer_SOURCES = cpuproc_analyzer.cpp
 
-AM_LDFLAGS = -lrdkloggers -lrmfosal -lrmfosalutils -lpthread
-AM_CXXFLAGS = -DRMF_OSAL_LITTLE_ENDIAN
+AM_LDFLAGS = -lpthread -lrdkloggers 
+
+if PROCANALYZER_BROADBAND
+AM_CXXFLAGS = -DPROCANALYZER_BROADBAND
+endif
