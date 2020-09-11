@@ -18,6 +18,7 @@
 ##########################################################################
 [Unit]
 Description=CPU Proc Analyzer Deamon
+OnFailure=path-fail-notifier@%n.service
 
 [Path]
 PathExists=/tmp/PROC_ANALYZER_ENABLE
