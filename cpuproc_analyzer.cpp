@@ -933,6 +933,7 @@ static void *handle_proc_ev_thread(void *arg )
     {
         RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","Subscription request failed\n");
     }
+    return NULL;
 }
 
 /**
