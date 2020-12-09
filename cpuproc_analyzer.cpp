@@ -62,7 +62,7 @@ const char *rdk_logger_module_fetch(void);
  * Flow diagram of CPU Proc Analyzer -
  * @image html CPUproc_analyzer_Flowchart_main.png
  * @image html CPUproc_analyzer_Flowchart_1.png
- * 
+ *
  * @defgroup CPU_PROC_ANALYZER_API  CPU Proc Public APIs
  * @ingroup  CPU_PROC_ANALYZER
  *
@@ -81,7 +81,9 @@ const char *rdk_logger_module_fetch(void);
 #define TIME_TO_RUN_SECS 0      //!< 0 means, tool should run until it is killed manually
 #define BUFF_SIZE_64  64
 #define BUFF_SIZE_16  16
-#define MEM_THRESHOLD 1536  //Max filesize limit
+#define DEFAULT_MEM_THRESHOLD 1536  //Max filesize limit
+#define MONITOR_ALL_PROC_DEF 0  //Default Monitor all process flag
+#define DEFAULT_DYNAMIC 0  //Default for Dynamic
 #define ITERATION_THRESHOLD 25  //Max number of runs
 
 #define PROC_EVENT_NONE  0x00000000
@@ -724,7 +726,7 @@ void CreateExclusionList()
  * @param[in] pname         Parent Name
  * @param[in] is_dynamic    Flag to check dynamically created process.
  */
-void LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=0)
+int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=0)
 {
     char tmp_string[1024];
     unsigned long vmStack=0;
@@ -745,7 +747,7 @@ void LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic
     }
     else
     {
-       RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","Failed to open proc/stat/ file of the process \n");
+       RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","Failed to open %s file\n", tmp_string);
     }
 
     // excluding processes of least concern
@@ -757,7 +759,7 @@ void LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic
             s= *it;
             if(strncmp(procData->s_comm,s.c_str(),strlen(procData->s_comm)) == 0)
             {
-                return;
+                return 0;
             }
         }
     }
@@ -766,7 +768,7 @@ void LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic
     {
         if(strlen(procData->s_comm) == 0)
         {
-            return;
+            return 0;
         }
         else
         {
@@ -775,7 +777,7 @@ void LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic
                 s = *it;
                 if(strncmp(procData->s_comm,s.c_str(),strlen(procData->s_comm)) == 0)
                 {
-                    return;
+                    return 0;
                 }
             }
         }
@@ -806,12 +808,12 @@ void LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic
                     return_val = strncmp(char_array,"sh",strlen(char_array));
                     if(return_val == 0)
                     {
-                        return;
+                        return 0;
                     }
                     return_val =strncmp(char_array,"cpuprocanalyzer",strlen(char_array));
                     if(return_val == 0)
                     {
-                        return;
+                        return 0;
                     }
 
                     int i=0;
@@ -827,20 +829,22 @@ void LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic
                 }
                 else
                 {
-                    return;
+                    RDK_LOG(RDK_LOG_DEBUG, "LOG.RDK.CPUPROCANALYZER","Rejecting process : %s\n", procData->s_comm);
+                    return 0;
                 }
             }
             return_val = strncmp(tmp_string,"sh",strlen(tmp_string));
             if(return_val == 0)
             {
-                return;
+                RDK_LOG(RDK_LOG_DEBUG, "LOG.RDK.CPUPROCANALYZER","Rejecting process : %s\n", procData->s_comm);
+                return 0;
             }
 
         }
         else
         {
             RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER"," Failed to open cmdline of shell script\n");
-            return ;
+            return 0;
         }
     }
 
@@ -918,8 +922,8 @@ void LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic
             sprintf(tmp_string, "/proc/%d/stat", procData->d_pid);
             FILE *f = fopen(tmp_string, "r");
             if ( f == 0 ) {
-                RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","Failed to open /proc/stat/ of dynamic process\n" );
-                return ;
+                RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","Failed to open /proc/%d/stat/ of dynamic process\n", procData->d_pid);
+                return 0;
             }
             else {
         fscanf(f, " %c %d %d %d %d %d %u %lu %lu %lu %lu %lu %lu %ld %ld %ld %ld %ld %ld %llu %lu %ld %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %d %d %u %u %llu %lu %ld", &procData->c_state, &procData->d_ppid, &procData->d_pgrp, &procData->d_session, &procData->d_tty_nr, &procData->d_tpgid, &procData->u_flags, &procData->lu_minflt, &procData->lu_cminflt, &procData->lu_majflt, &procData->lu_cmajflt, &procData->lu_utime, &procData->lu_stime, &procData->ld_cutime, &procData->ld_cstime, &procData->ld_priority, &procData->ld_nice, &procData->ld_num_threads, &procData->ld_itrealvalue, &procData->llu_starttime, &procData->lu_vsize, &procData->ld_rss, &procData->lu_rsslim, &procData->lu_startcode, &procData->lu_endcode, &procData->lu_startstack, &procData->lu_kstkesp, &procData->lu_kstkeip, &procData->lu_signal, &procData->lu_blocked, &procData->lu_sigignore, &procData->lu_sigcatch, &procData->lu_wchan, &procData->lu_nswap, &procData->lu_cnswap, &procData->d_exit_signal, &procData->d_processor, &procData->u_rt_priority, &procData->u_policy, &procData->llu_delayacct_blkio_ticks, &procData->lu_guest_time,&procData->ld_cguest_time);
@@ -948,7 +952,7 @@ void LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic
     }
 
     prevData[procData->d_pid].status = 1;
- 
+    return 1;
 }
 
 static volatile bool need_exit = false;
@@ -1080,7 +1084,7 @@ static int handle_process_events(int netlink_sock)
 
 /*
 *
-* Thread for handling dynamic process based on netlink process events 
+* Thread for handling dynamic process based on netlink process events
 *
 */
 static void *handle_proc_ev_thread(void *arg )
@@ -1126,37 +1130,36 @@ int checkifdigit(char* ch,int size)
         return retid;
 }
 
-bool CheckMemLimit (int itr)
+bool CheckMemLimit (int itr, unsigned long memLimit)
 {
-    char buf1[BUFF_SIZE_64]={"\0"};
+    char buf1[BUFF_SIZE_64]={0};
     static int prev_mem=0;
     int size_diff=0;
     int cur_mem=0;
-    FILE * fp = popen("du -s /tmp/cpuprocanalyzer | awk '{print$1}'", "r");
+    char tmp_filename[128]={0};
+    sprintf(tmp_filename,"du -s %s | awk '{print$1}'",outputDir.c_str());
 
-    if (fp == 0) 
+    FILE * fp = popen(tmp_filename, "r");
+
+    if (fp == 0)
     {
        RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER", "%s(%d): popen failed.Failed to read tmp details.\n", __func__, __LINE__);
        return false;
     }
-  
+
     memset(buf1, 0, BUFF_SIZE_64);
     fgets(buf1, BUFF_SIZE_64, fp);
     pclose(fp);
 
     cur_mem=atoi(buf1);
-    if (itr==1)
+    if (itr!=2)
     {
-      prev_mem=cur_mem;
+      size_diff=(cur_mem - prev_mem);
     }
-    if (itr)
-    {
-      size_diff=(cur_mem-prev_mem);
-    }
-
     RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Mem Limits curr : %d | prev : %d | diff : %d\n", cur_mem, prev_mem, size_diff);
+    prev_mem=cur_mem;
 
-    if ((cur_mem+size_diff)>=MEM_THRESHOLD)
+    if ((cur_mem + size_diff) >= memLimit)
         return false;
     return true;
 }
@@ -1176,7 +1179,8 @@ int main(int argc, char** argv)
     const char* ENV_OVERRIDE_PATH = CONFIG_PATH"/procanalyzerconfig.ini";
     const char* DEBUG_OVERRIDE_PATH = CONFIG_PATH"/debug.ini";
     const char* PROCESSES_LIST_PATH = CONFIG_PATH"/processes.list";
-    int iteration = -1;
+    int iteration = 0;
+    int pCount = 0;
 
     int returncode = EXIT_SUCCESS;
     string dynamicFolder;
@@ -1198,18 +1202,28 @@ int main(int argc, char** argv)
     char tmp_string[100];
     unsigned long timeToRun_sec ;
     unsigned int sleepInterval_ms;
+    unsigned long memoryLimit;
+    bool monitorAllProcess = false;
     bool enableDynamic = false;
     string grepProcesses;
     int env;
     char* ptr;
     char res[32];
     string ps_filename = outputDir + "selectedps.list";
-   memset(res,0,32);
-   ((env=read_config_param("FEATURE.CPUPROCANALYZER.SLEEP.SECS",pEnvConfig,res)) == 0) ? sleepInterval_ms = SLEEP_SECS*1000 : sleepInterval_ms =strtol(res,&ptr,10)*1000;
-   memset(res,0,32);
-  ((env=read_config_param("FEATURE.CPUPROCANALYZER.TIMETORUN.SECS",pEnvConfig,res)) == 0) ? timeToRun_sec = TIME_TO_RUN_SECS : timeToRun_sec = strtol(res,&ptr,10);
-   RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","%s(%d):\nSleep Interval(secs): %d\nTime To Run(secs): %ld\n", __func__, __LINE__, sleepInterval_ms/1000, timeToRun_sec);
-  //Clearing the contents of the output directory before running the tool
+    memset(res,0,32);
+    ((env=read_config_param("FEATURE.CPUPROCANALYZER.SLEEP.SECS",pEnvConfig,res)) == 0) ? sleepInterval_ms = SLEEP_SECS*1000 : sleepInterval_ms = strtol(res,&ptr,10)*1000;
+    memset(res,0,32);
+    ((env=read_config_param("FEATURE.CPUPROCANALYZER.TIMETORUN.SECS",pEnvConfig,res)) == 0) ? timeToRun_sec = TIME_TO_RUN_SECS : timeToRun_sec = strtol(res,&ptr,10);
+    //memset(res,0,32);
+    //((env=read_config_param("FEATURE.CPUPROCANALYZER.DYNAMIC",pEnvConfig,res)) == 0) ? enableDynamic = DEFAULT_DYNAMIC : enableDynamic = res[0] - '0';
+    memset(res,0,32);
+    ((env=read_config_param("FEATURE.CPUPROCANALYZER.MONITORALLPROCESS",pEnvConfig,res)) == 0) ? monitorAllProcess = MONITOR_ALL_PROC_DEF : monitorAllProcess = res[0] - '0';
+    memset(res,0,32);
+    ((env=read_config_param("FEATURE.CPUPROCANALYZER.MEMORYLIMIT",pEnvConfig,res)) == 0) ? memoryLimit = DEFAULT_MEM_THRESHOLD : memoryLimit = strtol(res,&ptr,10);
+    RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","%s(%d):\nSleep Interval(secs): %d\nTime To Run(secs): %ld\n", __func__, __LINE__, sleepInterval_ms/1000, timeToRun_sec);
+    RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Monitor All Process = %d, MemLimit = %ld\nDynamic = %d\n", monitorAllProcess, memoryLimit, enableDynamic);
+
+    //Clearing the contents of the output directory before running the tool
     sprintf(tmp_string, "cd %s && rm -rf *", outputDir.c_str());
     system(tmp_string);
     mkdir(outputDir.c_str(), S_IRWXU | S_IRWXG | S_IRWXO);
@@ -1218,44 +1232,10 @@ int main(int argc, char** argv)
     CreateExclusionList();
 
 
-  char tmpstring[1024],tmpstring1[128];
-  char buf1[64],buf2[8];
-  int val;
+    char tmpstring[1024],tmpstring1[128];
+    char buf1[64],buf2[8];
+    int val;
 
-  FILE*ptr1=fopen(ps_filename.c_str(), "w");
-
-  if(ptr1){
-  if (access(PROCESSES_LIST_PATH, F_OK) != -1)
-  {
-    //Read from /opt/processes.list or /nvram/processes.list
-        FILE* fp;
-        fp = fopen(PROCESSES_LIST_PATH, "r");
-        if(fp)
-        {
-            memset(buf1,0,64);
-            memset(buf2,0,8);
-            while(fgets(buf1,64,fp)!= NULL)
-            {
-               sprintf(tmpstring1,"pidof %s",buf1);
-               FILE *ptr2 = popen(tmpstring1,"r");
-               fgets(buf2,8,ptr2);
-               fprintf(ptr1,"%s\n",buf2);
-               memset(buf1,0,64);
-               memset(buf2,0,8);
-            }
-         }
-    }
-  else
-   {
-     RDK_LOG(RDK_LOG_INFO,"LOG.RDK.CPUPROCANALYZER","Process list not specified. Please add required processes to be monitored...\n");
-   }
-    fclose(ptr1);
-   }
-  
-   else
-  {
-  RDK_LOG(RDK_LOG_ERROR,"LOG.RDK.CPUPROCANALYZER"," Error opening the file: %s",ps_filename.c_str());
-  }
     unsigned long long startTime_sec = time(NULL);
     unsigned long long currentTime_sec = time(NULL);
     unsigned long timeElapsed_sec = 0;
@@ -1266,17 +1246,18 @@ int main(int argc, char** argv)
     unsigned long usedMemory;
     float idlePercent;
     bool firstIter = true;
+    bool monitorSysLevel = false;
 
     if(enableDynamic) {
-        returncode =pthread_create(&process_handler_tid,NULL,handle_proc_ev_thread,NULL);
+        returncode = pthread_create(&process_handler_tid,NULL,handle_proc_ev_thread,NULL);
 
         if (returncode == -1) {
             returncode = EXIT_FAILURE;
             RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","Dynamic process thread creation failed \n");
         }
     }
-    
-    while (iteration++, !terminate && (iteration < ITERATION_THRESHOLD) && CheckMemLimit (iteration))
+
+    while (iteration++, !terminate && CheckMemLimit (iteration,memoryLimit))/*&& (iteration < ITERATION_THRESHOLD) && CheckMemLimit (iteration))*/
     {
         //Capture Load Average value
         FILE *fp;
@@ -1286,7 +1267,7 @@ int main(int argc, char** argv)
         GetUsedMemory(&usedMemory);
 
         RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "%s(%d): Load: %0.2f Mem: %ld Idle: %0.2f\n", __func__, __LINE__, loadAvg, usedMemory, idlePercent);
-        
+
         fp = fopen(LOG_PATH"/cpuprocanalyzer/loadandmem.data", "a+");
 
         if(fp)
@@ -1302,66 +1283,127 @@ int main(int argc, char** argv)
         else
             RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER", "%s(%d):ERROR opening loadandmem.data file\n", __func__, __LINE__);
 
-    if (access(PROCESSES_LIST_PATH, F_OK) != -1)
-       {
-        fp_selectedps = fopen(ps_filename.c_str(), "r");
-        if(fp_selectedps)
+        if(monitorAllProcess == true)
         {
-            while(!feof(fp_selectedps))
-            {
-                fgets(tmp_string, LINE_LIMIT, fp_selectedps);
-                if(ferror(fp_selectedps) || feof(fp_selectedps))
-                    break;
-                sscanf(tmp_string, "%d", &procData.d_pid);
-                pthread_mutex_lock(&mtx);
-                LogProcData(&procData);
-                pthread_mutex_unlock(&mtx);
-                sprintf(tmp_string, "ls /proc/%d/task/ > %s%d_%s/threads.list", procData.d_pid, outputDir.c_str(), procData.d_pid, procData.s_comm);
-                system(tmp_string);
-                sprintf(tmp_string, "%s%d_%s/threads.list", outputDir.c_str(), procData.d_pid, procData.s_comm);
-                FILE* fp_thread_list = fopen(tmp_string, "r");
-                if(fp_thread_list)
-                {
-                    while(!feof(fp_thread_list))
-                    {
-                        fgets(tmp_string, LINE_LIMIT, fp_thread_list);
-                        if( ferror(fp_thread_list) || feof(fp_thread_list) )
-                            break;
-                        sscanf(tmp_string, "%d", &threadData.d_pid);
-                        if(threadData.d_pid != procData.d_pid)
-                        {   pthread_mutex_lock(&mtx);
-                            LogProcData(&threadData, procData.d_pid, procData.s_comm);
-                            pthread_mutex_unlock(&mtx);
-                        }
-                    }
-                    fclose(fp_thread_list);
-                }
-                memset(tmp_string,0,sizeof(tmp_string));
-            }
-            fclose(fp_selectedps);
-            map<unsigned int, struct stPrevData>::iterator it = prevData.begin();
-            while(it != prevData.end())
-            {
-                stPrevData preData = it->second;
-                if(preData.status == 0)
-                {
-                    RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","%s(%d): ***Removing %d from map***\n", __func__, __LINE__, it->first);
-                    prevData.erase(it);
-                }
-                else
-                    preData.status = 0;
-                ++it;
-            }
+           char tstr[100];
+           memset (tstr, 0, sizeof(tstr));
+           RDK_LOG(RDK_LOG_INFO,"LOG.RDK.CPUPROCANALYZER","Monitoring all process...\n");
+           sprintf (tstr, "ps -w > %s", ps_filename.c_str());
+           if (system(tstr) == -1)
+           {
+              RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER", "%s(%d): FAILED ps command\n", __func__, __LINE__);
+              RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER", "%s(%d): Monitoring at system level only...\n", __func__, __LINE__);
+              continue;
+           }
+        }
+        else if(access(PROCESSES_LIST_PATH, F_OK) != -1)
+        {
+           FILE* ptr1=fopen(ps_filename.c_str(), "w");
+
+           if (ptr1)
+           {
+           //Read from /opt/processes.list or /nvram/processes.list
+              FILE* fp;
+              fp = fopen(PROCESSES_LIST_PATH, "r");
+              if (fp)
+              {
+                 memset(buf1,0,64);
+                 memset(buf2,0,8);
+                 while (fgets(buf1,64,fp)!= NULL)
+                 {
+                    sprintf(tmpstring1,"pidof %s",buf1);
+                    FILE *ptr2 = popen(tmpstring1,"r");
+                    fgets(buf2,8,ptr2);
+                    fprintf(ptr1,"%s",buf2);
+                    memset(buf1,0,64);
+                    memset(buf2,0,8);
+                 }
+                 fclose (fp);
+              }
+              fclose(ptr1);
+           }
+           else
+           {
+              RDK_LOG(RDK_LOG_ERROR,"LOG.RDK.CPUPROCANALYZER"," Error opening the file: %s",ps_filename.c_str());
+              continue;
+           }
         }
         else
         {
-            RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","%s(%d): ERROR opening the file: %s\n", __func__, __LINE__, ps_filename.c_str());
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "%s(%d): Monitoring at system level only...\n", __func__, __LINE__);
+            monitorSysLevel = true;
         }
+#if 0
+    if (access(PROCESSES_LIST_PATH, F_OK) != -1)
+       {
+#endif
+        if(!monitorSysLevel)
+        {
+           fp_selectedps = fopen(ps_filename.c_str(), "r");
+           if(fp_selectedps)
+           {
+               while(!feof(fp_selectedps))
+               {
+                   fgets(tmp_string, LINE_LIMIT, fp_selectedps);
+                   if(ferror(fp_selectedps) || feof(fp_selectedps))
+                       break;
+                   sscanf(tmp_string, "%d", &procData.d_pid);
+                   pthread_mutex_lock(&mtx);
+                   pCount += LogProcData(&procData);
+                   pthread_mutex_unlock(&mtx);
+                   sprintf(tmp_string, "ls /proc/%d/task/ > %s%d_%s/threads.list", procData.d_pid, outputDir.c_str(), procData.d_pid, procData.s_comm);
+                   system(tmp_string);
+                   sprintf(tmp_string, "%s%d_%s/threads.list", outputDir.c_str(), procData.d_pid, procData.s_comm);
+                   FILE* fp_thread_list = fopen(tmp_string, "r");
+                   if(fp_thread_list)
+                   {
+                       while(!feof(fp_thread_list))
+                       {
+                           fgets(tmp_string, LINE_LIMIT, fp_thread_list);
+                           if( ferror(fp_thread_list) || feof(fp_thread_list) )
+                               break;
+                           sscanf(tmp_string, "%d", &threadData.d_pid);
+                           if(threadData.d_pid != procData.d_pid)
+                           {
+                               pthread_mutex_lock(&mtx);
+                               LogProcData(&threadData, procData.d_pid, procData.s_comm);
+                               pthread_mutex_unlock(&mtx);
+                           }
+                       }
+                       fclose(fp_thread_list);
+                   }
+                   memset(tmp_string,0,sizeof(tmp_string));
+               }
+               fclose(fp_selectedps);
+               map<unsigned int, struct stPrevData>::iterator it = prevData.begin();
+               while(it != prevData.end())
+               {
+                   stPrevData preData = it->second;
+                   if(preData.status == 0)
+                   {
+                       RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","%s(%d): ***Removing %d from map***\n", __func__, __LINE__, it->first);
+                       prevData.erase(it);
+                   }
+                   else
+                       preData.status = 0;
+                   ++it;
+               }
+           }
+           else
+           {
+               RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","%s(%d): ERROR opening the file: %s\n", __func__, __LINE__, ps_filename.c_str());
+           }
+#if 0
      }
    else
      {
         RDK_LOG(RDK_LOG_INFO,"LOG.RDK.CPUPROCANALYZER","Process list not specified. Monitoring only basic statistics...\n");
      }
+#endif
+
+           RDK_LOG(RDK_LOG_INFO,"LOG.RDK.CPUPROCANALYZER", "[%d]No. of process monitored : %d\n\n", iteration, pCount);
+           pCount = 0;
+        }
 
         if(timeToRun_sec)
         {
@@ -1371,8 +1413,11 @@ int main(int argc, char** argv)
                terminate = true;
         }
 
-        usleep(sleepInterval_ms*1000);
-        totalTimeElapsed_sec += sleepInterval_ms/1000;
+        if(!terminate)
+        {
+            usleep(sleepInterval_ms*1000);
+            totalTimeElapsed_sec += sleepInterval_ms/1000;
+        }
     }
     #if defined PROCANALYZER_BROADBAND
     RDK_LOG(RDK_LOG_INFO,"LOG.RDK.CPUPROCANALYZER", "Triggering RunCPUProcAnalyzer.sh stop...\n");
