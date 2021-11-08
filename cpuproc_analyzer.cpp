@@ -83,7 +83,7 @@ const char *rdk_logger_module_fetch(void);
 #define BUFF_SIZE_16  16
 #define DEFAULT_MEM_THRESHOLD 1536  //Max filesize limit
 #define MONITOR_ALL_PROC_DEF 0  //Default Monitor all process flag
-#define DEFAULT_DYNAMIC 0  //Default for Dynamic
+#define DEFAULT_DYNAMIC 1  //Default for Dynamic
 #define ITERATION_THRESHOLD 25  //Max number of runs
 
 #define PROC_EVENT_NONE  0x00000000
@@ -969,7 +969,7 @@ static int netlink_connect()
 
     netlink_sock = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_CONNECTOR);
     if (netlink_sock == -1) {
-        RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","Failed to create socket \n");
+        RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","Failed to create socket. Error code = %d \n", errno);
         return -1;
     }
 
@@ -1204,7 +1204,7 @@ int main(int argc, char** argv)
     unsigned int sleepInterval_ms;
     unsigned long memoryLimit;
     bool monitorAllProcess = false;
-    bool enableDynamic = false;
+    bool enableDynamic = true;
     string grepProcesses;
     int env;
     char* ptr;
@@ -1214,8 +1214,8 @@ int main(int argc, char** argv)
     ((env=read_config_param("FEATURE.CPUPROCANALYZER.SLEEP.SECS",pEnvConfig,res)) == 0) ? sleepInterval_ms = SLEEP_SECS*1000 : sleepInterval_ms = strtol(res,&ptr,10)*1000;
     memset(res,0,32);
     ((env=read_config_param("FEATURE.CPUPROCANALYZER.TIMETORUN.SECS",pEnvConfig,res)) == 0) ? timeToRun_sec = TIME_TO_RUN_SECS : timeToRun_sec = strtol(res,&ptr,10);
-    //memset(res,0,32);
-    //((env=read_config_param("FEATURE.CPUPROCANALYZER.DYNAMIC",pEnvConfig,res)) == 0) ? enableDynamic = DEFAULT_DYNAMIC : enableDynamic = res[0] - '0';
+    memset(res,0,32);
+    ((env=read_config_param("FEATURE.CPUPROCANALYZER.DYNAMIC",pEnvConfig,res)) == 0) ? enableDynamic = DEFAULT_DYNAMIC : enableDynamic = res[0] - '0';
     memset(res,0,32);
     ((env=read_config_param("FEATURE.CPUPROCANALYZER.MONITORALLPROCESS",pEnvConfig,res)) == 0) ? monitorAllProcess = MONITOR_ALL_PROC_DEF : monitorAllProcess = res[0] - '0';
     memset(res,0,32);
