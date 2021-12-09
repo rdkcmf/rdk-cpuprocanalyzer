@@ -1,4 +1,4 @@
-##########################################################################
+########################################################################
 # If not stated otherwise in this file or this component's Licenses.txt
 # file the following copyright and licenses apply:
 #
@@ -57,6 +57,24 @@ AC_ARG_ENABLE([procanalyzer-broadband],
 AM_CONDITIONAL([PROCANALYZER_BROADBAND], [test x$PROCANALYZER_BROADBAND = xtrue])
 
 AC_SUBST(PROCANALYZER_BROADBAND)
+
+# Extender
+PROCANALYZER_EXTENDER=" "
+AC_ARG_ENABLE([procanalyzer-extender],
+        AS_HELP_STRING([--enable-procanalyzer-extender],[This will decide broadband or pod device]),
+        [
+          case "${enableval}" in
+           yes) PROCANALYZER_EXTENDER=true ;;
+           no) PROCANALYZER_EXTENDER=false
+                echo "Extender device ";;
+          *) AC_MSG_ERROR([bad value ${enableval} for --enable-procanalyzer-extender]) ;;
+           esac
+           ],
+         [echo " extender device"])
+AM_CONDITIONAL([PROCANALYZER_EXTENDER], [test x$PROCANALYZER_EXTENDER = xtrue])
+
+AC_SUBST(PROCANALYZER_EXTENDER)
+
 
 AC_CONFIG_FILES([Makefile])
 

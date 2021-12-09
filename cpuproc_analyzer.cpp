@@ -34,16 +34,20 @@
 #include <map>
 #include <sstream>
 #include <stdarg.h>
+#ifndef PROCANALYZER_EXTENDER
 #include "rdk_debug.h"
+#endif
 #include <bits/stdc++.h>
 using namespace std;
 
+#ifndef PROCANALYZER_EXTENDER
 extern "C" {
     // C Function call
 #include <cimplog/cimplog.h>
 #define LOGGING_MODULE "CPUPROCANALYZER"
 const char *rdk_logger_module_fetch(void);
 }
+#endif
 
 
 /**
@@ -83,7 +87,15 @@ const char *rdk_logger_module_fetch(void);
 #define PROC_EVENT_NONE  0x00000000
 #define PROC_EVENT_FORK  0x00000001
 #define PROC_EVENT_EXEC  0x00000002
-
+#ifdef PROCANALYZER_EXTENDER
+#define  RDK_LOG_ERROR 0
+#define  RDK_LOG_DEBUG 1
+#define  RDK_LOG_INFO 2
+#define  RDK_LOG_TRACE1 3
+#define  RDK_LOG get_proclog
+#define  EXTENDER_VENDOR_NAME_STR "vendor_name"
+#define  EXTENDER_MODEL_NAME_STR  "model"
+#endif
 pthread_mutex_t mtx;
 /**
  * @struct stPrevData
@@ -125,8 +137,11 @@ FILE* fp_selectedps = NULL;
 FILE* fp_stat = NULL;
 FILE* fp_dataOut = NULL;
 
-#ifdef PROCANALYZER_BROADBAND
+#if defined  PROCANALYZER_BROADBAND
  #define CONFIG_PATH "/nvram"
+ #define LOG_PATH    "/tmp"
+#elif defined PROCANALYZER_EXTENDER
+ #define CONFIG_PATH "/usr/opensync/scripts"
  #define LOG_PATH    "/tmp"
 #else
  #define CONFIG_PATH "/opt"
@@ -140,7 +155,49 @@ long totalTimeElapsed_sec = 0;
 char strTime[80];
 list<string>  exclude_process_list;
 list<string> :: iterator it;
+#ifdef PROCANALYZER_EXTENDER 
+// Get the Log level
+char* GetCurTimeStamp(); 
+void get_proclog(int log_level,const char * log_module ,const char *format, ...)
+ {
+     printf("%s\t",GetCurTimeStamp());
+    if(log_level==0){
+        printf("<ERROR>\t");
+    }
+    else if(log_level==1){
+        printf("<DEBUG>\t");
+    }
+    else if(log_level==2){
+        printf("<INFO>\t");
+    }
+    else if(log_level==3){
+        printf("<TRACE1>\t");
+    }
+    va_list args;
+    printf("%s\t",log_module);
+    va_start(args, format);
+    vprintf(format, args);
+    printf("\n");
+    va_end(args);
+    return;
+}
 
+int get_device_param(char* param,char* value)
+{
+    char tmp_string[BUFF_SIZE_64]  ="\0";
+    char buf1[BUFF_SIZE_64]        ="\0";
+    sprintf(tmp_string," ovsh s AWLAN_Node %s -j | grep :",param);
+    FILE * fp = popen(tmp_string, "r");
+    if (fp == 0)
+    {
+       RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER", " popen failed.Failed to run the command.\n");
+       return -1;
+    }
+    fgets(buf1, BUFF_SIZE_64, fp);
+    sscanf(buf1,"        \"%[^'\"''']\": \"%[^'\"']\"",tmp_string,value);
+    return 1;
+}
+#endif
 char* removespaces(char *str);
 int read_config_param(const char *paramname,const char *filename,char *res)
 {
@@ -283,8 +340,8 @@ void ReadDeviceName()
     char devicename[BUFF_SIZE_16]  = "\0";
     char buildname[BUFF_SIZE_64]   = "\0";
     char name[100]                 = "\0";
-
-    #if PROCANALYZER_BROADBAND
+ 
+    #if defined PROCANALYZER_BROADBAND
     memset (mfgname, 0, BUFF_SIZE_16);
     GetValuesFromFile ("/etc/device.properties", "MANUFACTURE=", mfgname, sizeof(mfgname));
 
@@ -294,7 +351,9 @@ void ReadDeviceName()
 
     memset(devicename,0,BUFF_SIZE_16);
     GetValuesFromFile ("/etc/device.properties", "BOX_TYPE=", devicename, sizeof(devicename));
-
+    #elif defined PROCANALYZER_EXTENDER
+    get_device_param(EXTENDER_VENDOR_NAME_STR,mfgname);
+    get_device_param(EXTENDER_MODEL_NAME_STR,devicename);
     #else
 
     memset (mfgname, 0, BUFF_SIZE_16);
@@ -1078,7 +1137,7 @@ bool CheckMemLimit (int itr)
     if (fp == 0) 
     {
        RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER", "%s(%d): popen failed.Failed to read tmp details.\n", __func__, __LINE__);
-       return FALSE;
+       return false;
     }
   
     memset(buf1, 0, BUFF_SIZE_64);
@@ -1123,14 +1182,14 @@ int main(int argc, char** argv)
     string dynamicFolder;
     int returnid;
     pthread_t process_handler_tid;
-
+    #ifndef PROCANALYZER_EXTENDER
     if (access(DEBUG_OVERRIDE_PATH, F_OK) != -1)
         pDebugConfig = DEBUG_OVERRIDE_PATH;
     else
         pDebugConfig = DEBUG_ACTUAL_PATH;
 
     rdk_logger_init(pDebugConfig);
-
+    #endif
     if (access(ENV_OVERRIDE_PATH, F_OK) != -1)
         pEnvConfig = ENV_OVERRIDE_PATH;
     else
@@ -1303,32 +1362,36 @@ int main(int argc, char** argv)
      {
         RDK_LOG(RDK_LOG_INFO,"LOG.RDK.CPUPROCANALYZER","Process list not specified. Monitoring only basic statistics...\n");
      }
-    
+
         if(timeToRun_sec)
         {
             currentTime_sec = time(NULL);
             timeElapsed_sec = difftime(currentTime_sec, startTime_sec);
             if(timeElapsed_sec >= timeToRun_sec)
-                terminate = true;
+               terminate = true;
         }
 
         usleep(sleepInterval_ms*1000);
         totalTimeElapsed_sec += sleepInterval_ms/1000;
     }
-    #ifdef PROCANALYZER_BROADBAND
+    #if defined PROCANALYZER_BROADBAND
     RDK_LOG(RDK_LOG_INFO,"LOG.RDK.CPUPROCANALYZER", "Triggering RunCPUProcAnalyzer.sh stop...\n");
     system("/lib/rdk/RunCPUProcAnalyzer.sh stop");
+    #elif  defined PROCANALYZER_EXTENDER
+     RDK_LOG(RDK_LOG_INFO,"LOG.RDK.CPUPROCANALYZER", "Stop CPU Proc Analyzer ...\n");
+     system("/usr/opensync/scripts/run_procanalyzer.sh stop");
     #endif
     sleep(5);
     RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","%s(%d): ***Exiting the application***\n", __func__, __LINE__);
     return 0;
 }
 
+#ifndef PROCANALYZER_EXTENDER
 const char *rdk_logger_module_fetch(void)
 {
     return "LOG.RDK.CPUPROCANALYZER";
 }
-
+#endif
 /**
  * @} // End of Doxygen
  */
