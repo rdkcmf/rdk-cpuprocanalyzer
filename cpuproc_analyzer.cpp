@@ -49,7 +49,6 @@ const char *rdk_logger_module_fetch(void);
 }
 #endif
 
-
 /**
  * @defgroup CPU_PROC_ANALYZER CPU Proc Analyzer
  *
@@ -85,6 +84,8 @@ const char *rdk_logger_module_fetch(void);
 #define MONITOR_ALL_PROC_DEF 0  //Default Monitor all process flag
 #define DEFAULT_DYNAMIC 1  //Default for Dynamic
 #define ITERATION_THRESHOLD 25  //Max number of runs
+
+#define MAX(x,y) ((x>y)?x:y)
 
 #define PROC_EVENT_NONE  0x00000000
 #define PROC_EVENT_FORK  0x00000001
@@ -709,6 +710,7 @@ void CreateExclusionList()
     char buf1[ BUFF_SIZE_64 ];
     while(fgets(buf1,BUFF_SIZE_64,fp)!= NULL)
     {
+        buf1[strlen(buf1) - 1] = '\0';
         exclude_process_list.push_back(string(buf1));
         memset(buf1,0,sizeof(buf1));
     }
@@ -728,14 +730,14 @@ void CreateExclusionList()
  */
 int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=0)
 {
-    char tmp_string[1024];
+    char tmp_string[1024] = {0};
     unsigned long vmStack=0;
     unsigned long vmSize=0;
     unsigned long vmRSS=0;
     char char_array[512];
     int return_val;
     string searchstr = ".sh";
-    string word,s;
+    string s;
     memset(tmp_string,0,1024);
     (ppid != 0) ? sprintf(tmp_string, "/proc/%d/task/%d/stat", ppid, procData->d_pid)
     : sprintf(tmp_string, "/proc/%d/stat", procData->d_pid);
@@ -748,16 +750,16 @@ int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=
     else
     {
        RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","Failed to open %s file\n", tmp_string);
+       return 0;
     }
 
     // excluding processes of least concern
-
     if(ppid!= 0)
     {
          for(it=exclude_process_list.begin();it!=exclude_process_list.end();it++)
         {
             s= *it;
-            if(strncmp(procData->s_comm,s.c_str(),strlen(procData->s_comm)) == 0)
+            if(strncmp(procData->s_comm,s.c_str(),MAX(strlen(procData->s_comm),strlen(s.c_str()))) == 0)
             {
                 return 0;
             }
@@ -775,7 +777,7 @@ int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=
             for(it=exclude_process_list.begin();it!=exclude_process_list.end();it++)
             {
                 s = *it;
-                if(strncmp(procData->s_comm,s.c_str(),strlen(procData->s_comm)) == 0)
+                if(strncmp(procData->s_comm,s.c_str(),MAX(strlen(procData->s_comm),strlen(s.c_str()))) == 0)
                 {
                     return 0;
                 }
@@ -789,65 +791,43 @@ int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=
     GetMemParams(tmp_string, &vmSize, "VmSize:");
     GetMemParams(tmp_string, &vmRSS, "VmRSS:");
 
-    //Check for shell scripts
-    if(strstr(procData->s_comm,"sh") || strstr(procData->s_comm,"bash"))
+    /*
+      Possible cases from /proc/<pid>/cmdline that confirms a script running
+          1. /bin/sh <script>
+          2. /bin/bash <script>
+          2. sh <script>
+          3. -sh
+          4. -bash
+      Substring sh in processname can be cross verified with the presence of "sh" in /proc/<pid>/comm
+    */
+    sprintf(tmp_string, "/proc/%d/cmdline", procData->d_pid);
+    FILE* fp_cmd = fopen(tmp_string, "r");
+    if(fp_cmd)
     {
-        sprintf(tmp_string, "/proc/%d/cmdline", procData->d_pid);
-        FILE* fp_cmd = fopen(tmp_string, "r");
-        if(fp_cmd)
-        {
-            fscanf(fp_cmd, "%s", tmp_string);
-            fclose(fp_cmd);
-            RDK_LOG(RDK_LOG_DEBUG, "LOG.RDK.CPUPROCANALYZER","cmd line :%s\n",tmp_string);
-            stringstream ss(tmp_string);
-            while(ss >> word)
-            {
-                if( strstr(word.c_str(),searchstr.c_str()))
-                {
-                    strncpy(char_array,word.c_str(),sizeof(char_array));
-                    return_val = strncmp(char_array,"sh",strlen(char_array));
-                    if(return_val == 0)
-                    {
-                        return 0;
-                    }
-                    return_val =strncmp(char_array,"cpuprocanalyzer",strlen(char_array));
-                    if(return_val == 0)
-                    {
-                        return 0;
-                    }
+        fgets(tmp_string, sizeof(tmp_string), fp_cmd);
+        fclose(fp_cmd);
 
-                    int i=0;
-                    while(char_array[i] != '\0')
-                    {
-                        if(char_array[i]== '/')
-                        {
-                            char_array[i]= '_';
-                        }
-                        i++;
-                    }
-                    strncpy(procData->s_comm,char_array,sizeof(procData->s_comm)-1);
-                }
-                else
+        if ( (strncmp(tmp_string,"/bin/sh",strlen(tmp_string)) == 0) || (strncmp(tmp_string,"sh",strlen(tmp_string)) ==0 )
+              || (strncmp(tmp_string,"-sh",strlen(tmp_string)) == 0) || (strncmp(tmp_string,"-bash",strlen(tmp_string)) == 0)
+              || (strncmp(tmp_string,"/bin/bash",strlen(tmp_string)) == 0) )
+        {
+            RDK_LOG(RDK_LOG_DEBUG, "LOG.RDK.CPUPROCANALYZER","Rejecting process : %s\n", procData->s_comm);
+            return 0;
+        } else if ( strstr(tmp_string,searchstr.c_str()) ) {
+            sprintf(tmp_string, "/proc/%d/comm", procData->d_pid);
+            FILE* fp_cmd = fopen(tmp_string, "r");
+            if(fp_cmd)
+            {
+                fgets(tmp_string, sizeof(tmp_string), fp_cmd);
+                fclose(fp_cmd);
+                if( (strncmp(tmp_string,"sh",strlen(tmp_string)) == 0) || (strncmp(tmp_string,"bash",strlen(tmp_string)) == 0) )
                 {
                     RDK_LOG(RDK_LOG_DEBUG, "LOG.RDK.CPUPROCANALYZER","Rejecting process : %s\n", procData->s_comm);
                     return 0;
                 }
             }
-            return_val = strncmp(tmp_string,"sh",strlen(tmp_string));
-            if(return_val == 0)
-            {
-                RDK_LOG(RDK_LOG_DEBUG, "LOG.RDK.CPUPROCANALYZER","Rejecting process : %s\n", procData->s_comm);
-                return 0;
-            }
-
-        }
-        else
-        {
-            RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER"," Failed to open cmdline of shell script\n");
-            return 0;
         }
     }
-
 
     if (ppid != 0) {
         sprintf(tmp_string, "%s/%d_%s/threads/", outputDir.c_str(), ppid, pname);
@@ -862,15 +842,12 @@ int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=
         else
         {
             sprintf(tmp_string, "%s%d_%s", outputDynamicDir.c_str(), procData->d_pid, procData->s_comm);
-
         }
     }
-
 
     mkdir(tmp_string, S_IRWXU | S_IRWXG | S_IRWXO);
     (ppid != 0) ? procData->OutFilename(tmp_string, ppid, pname) : procData->OutFilename(tmp_string,is_dynamic);
     fp_dataOut = fopen(tmp_string, "a+");
-
 
     if(fp_dataOut)
     {
@@ -926,29 +903,27 @@ int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=
                 return 0;
             }
             else {
-        fscanf(f, " %c %d %d %d %d %d %u %lu %lu %lu %lu %lu %lu %ld %ld %ld %ld %ld %ld %llu %lu %ld %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %d %d %u %u %llu %lu %ld", &procData->c_state, &procData->d_ppid, &procData->d_pgrp, &procData->d_session, &procData->d_tty_nr, &procData->d_tpgid, &procData->u_flags, &procData->lu_minflt, &procData->lu_cminflt, &procData->lu_majflt, &procData->lu_cmajflt, &procData->lu_utime, &procData->lu_stime, &procData->ld_cutime, &procData->ld_cstime, &procData->ld_priority, &procData->ld_nice, &procData->ld_num_threads, &procData->ld_itrealvalue, &procData->llu_starttime, &procData->lu_vsize, &procData->ld_rss, &procData->lu_rsslim, &procData->lu_startcode, &procData->lu_endcode, &procData->lu_startstack, &procData->lu_kstkesp, &procData->lu_kstkeip, &procData->lu_signal, &procData->lu_blocked, &procData->lu_sigignore, &procData->lu_sigcatch, &procData->lu_wchan, &procData->lu_nswap, &procData->lu_cnswap, &procData->d_exit_signal, &procData->d_processor, &procData->u_rt_priority, &procData->u_policy, &procData->llu_delayacct_blkio_ticks, &procData->lu_guest_time,&procData->ld_cguest_time);
-
+                fscanf(f, " %c %d %d %d %d %d %u %lu %lu %lu %lu %lu %lu %ld %ld %ld %ld %ld %ld %llu %lu %ld %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %d %d %u %u %llu %lu %ld", &procData->c_state, &procData->d_ppid, &procData->d_pgrp, &procData->d_session, &procData->d_tty_nr, &procData->d_tpgid, &procData->u_flags, &procData->lu_minflt, &procData->lu_cminflt, &procData->lu_majflt, &procData->lu_cmajflt, &procData->lu_utime, &procData->lu_stime, &procData->ld_cutime, &procData->ld_cstime, &procData->ld_priority, &procData->ld_nice, &procData->ld_num_threads, &procData->ld_itrealvalue, &procData->llu_starttime, &procData->lu_vsize, &procData->ld_rss, &procData->lu_rsslim, &procData->lu_startcode, &procData->lu_endcode, &procData->lu_startstack, &procData->lu_kstkesp, &procData->lu_kstkeip, &procData->lu_signal, &procData->lu_blocked, &procData->lu_sigignore, &procData->lu_sigcatch, &procData->lu_wchan, &procData->lu_nswap, &procData->lu_cnswap, &procData->d_exit_signal, &procData->d_processor, &procData->u_rt_priority, &procData->u_policy, &procData->llu_delayacct_blkio_ticks, &procData->lu_guest_time,&procData->ld_cguest_time);
                 cpuUseRaise= procData->lu_utime + procData->lu_stime;
-               cpuUseRaise_User = procData->lu_utime;
+                cpuUseRaise_User = procData->lu_utime;
                 cpuUseRaise_System = procData->lu_stime;
-
                 fprintf(fp_dataOut, "%ld\t%s\t%0.2lf\t%0.2lf\t%0.2lf\t%d\t%ld\t%ld\t%ld\t\n", totalTimeElapsed_sec, GetCurTimeStamp(), cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise, vmSize, vmRSS, vmStack);
-
                 RDK_LOG(RDK_LOG_TRACE1, "LOG.RDK.CPUPROCANALYZER", "%s(%d): %0.2lf %0.2lf %0.2lf %d %ld %ld %ld \n", __func__, __LINE__, cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise, vmSize, vmRSS, vmStack);
             }
-           fclose(f);
+            fclose(f);
        }
 
-        if(prevData[procData->d_pid].status)
-        {
-            fprintf(fp_dataOut, "%ld\t%s\t%0.2lf\t%0.2lf\t%0.2lf\t%d\t%ld\t%ld\t%ld\t\n", totalTimeElapsed_sec, GetCurTimeStamp(), cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise, vmSize, vmRSS, vmStack);
+       if(prevData[procData->d_pid].status)
+       {
+           fprintf(fp_dataOut, "%ld\t%s\t%0.2lf\t%0.2lf\t%0.2lf\t%d\t%ld\t%ld\t%ld\t\n", totalTimeElapsed_sec, GetCurTimeStamp(), cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise, vmSize, vmRSS, vmStack);
            RDK_LOG(RDK_LOG_TRACE1, "LOG.RDK.CPUPROCANALYZER","%s(%d): %0.2lf %0.2lf %0.2lf %d %ld %ld %ld \n", __func__, __LINE__, cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise, vmSize, vmRSS, vmStack);
-        }
-        fclose(fp_dataOut);
+       }
+       fclose(fp_dataOut);
     }
     else
     {
         RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","%s(%d): ERROR opening the file: %s\n", __func__, __LINE__, tmp_string);
+        return 0;
     }
 
     prevData[procData->d_pid].status = 1;
@@ -1313,10 +1288,12 @@ int main(int argc, char** argv)
                  {
                     sprintf(tmpstring1,"pidof %s",buf1);
                     FILE *ptr2 = popen(tmpstring1,"r");
-                    fgets(buf2,8,ptr2);
-                    fprintf(ptr1,"%s",buf2);
+                    while (fscanf(ptr2,"%s",buf2) != EOF)
+                    {
+                        fprintf(ptr1,"%s\n",buf2);
+                        memset(buf2,0,8);
+                    }
                     memset(buf1,0,64);
-                    memset(buf2,0,8);
                  }
                  fclose (fp);
               }
@@ -1333,10 +1310,7 @@ int main(int argc, char** argv)
             RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "%s(%d): Monitoring at system level only...\n", __func__, __LINE__);
             monitorSysLevel = true;
         }
-#if 0
-    if (access(PROCESSES_LIST_PATH, F_OK) != -1)
-       {
-#endif
+
         if(!monitorSysLevel)
         {
            fp_selectedps = fopen(ps_filename.c_str(), "r");
@@ -1349,7 +1323,12 @@ int main(int argc, char** argv)
                        break;
                    sscanf(tmp_string, "%d", &procData.d_pid);
                    pthread_mutex_lock(&mtx);
-                   pCount += LogProcData(&procData);
+                   if(!LogProcData(&procData))
+                   {
+                       pthread_mutex_unlock(&mtx);
+                       continue;
+                   }
+                   pCount++;
                    pthread_mutex_unlock(&mtx);
                    sprintf(tmp_string, "ls /proc/%d/task/ > %s%d_%s/threads.list", procData.d_pid, outputDir.c_str(), procData.d_pid, procData.s_comm);
                    system(tmp_string);
@@ -1393,13 +1372,6 @@ int main(int argc, char** argv)
            {
                RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","%s(%d): ERROR opening the file: %s\n", __func__, __LINE__, ps_filename.c_str());
            }
-#if 0
-     }
-   else
-     {
-        RDK_LOG(RDK_LOG_INFO,"LOG.RDK.CPUPROCANALYZER","Process list not specified. Monitoring only basic statistics...\n");
-     }
-#endif
 
            RDK_LOG(RDK_LOG_INFO,"LOG.RDK.CPUPROCANALYZER", "[%d]No. of process monitored : %d\n\n", iteration, pCount);
            pCount = 0;
