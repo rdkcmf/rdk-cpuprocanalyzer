@@ -74,9 +74,9 @@ const char *rdk_logger_module_fetch(void);
  * @{
  */
 
-#define LINE_LIMIT 1000         //!< FILE LINE LIMIT
+#define LINE_LIMIT 256          //!< FILE LINE LIMIT
 #define NAME_LIMIT 20           //!< FILE NAME LIMIT
-#define SLEEP_SECS 60         //!< Sleep Interval for the data collection
+#define SLEEP_SECS 60           //!< Sleep Interval for the data collection
 #define TIME_TO_RUN_SECS 0      //!< 0 means, tool should run until it is killed manually
 #define BUFF_SIZE_64  64
 #define BUFF_SIZE_16  16
@@ -734,7 +734,6 @@ int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=
     unsigned long vmStack=0;
     unsigned long vmSize=0;
     unsigned long vmRSS=0;
-    char char_array[512];
     int return_val;
     string searchstr = ".sh";
     string s;
@@ -1174,7 +1173,7 @@ int main(int argc, char** argv)
     else
         pEnvConfig = ENV_ACTUAL_PATH;
 
-    char tmp_string[100];
+    char tmp_string[256]={0};
     unsigned long timeToRun_sec ;
     unsigned int sleepInterval_ms;
     unsigned long memoryLimit;
