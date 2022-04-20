@@ -34,6 +34,12 @@
 #include <map>
 #include <sstream>
 #include <stdarg.h>
+
+#ifdef PROCANALYZER_BROADBAND
+#include <telemetry_busmessage_sender.h>
+#include <json-c/json.h>
+#endif
+
 #ifndef PROCANALYZER_EXTENDER
 #include "rdk_debug.h"
 #endif
@@ -84,6 +90,27 @@ const char *rdk_logger_module_fetch(void);
 #define MONITOR_ALL_PROC_DEF 0  //Default Monitor all process flag
 #define DEFAULT_DYNAMIC 1  //Default for Dynamic
 #define ITERATION_THRESHOLD 25  //Max number of runs
+#define TELEMETRY_ONLY_DEF 0 // Only telemetry reporting default flag
+
+#define CPU_MASK 0x10
+#define MEMORY_MASK 0x08
+#define FDCOUNT_MASK 0x04
+#define THREADCOUNT_MASK 0x02
+#define LOADAVG_MASK 0x02
+#define CLICOUNT_MASK 0x01
+
+#define SYS_DEF_MASK 0x1F
+#define PROC_DEF_MASK 0x1E
+
+typedef unsigned int uint;
+
+#ifdef PROCANALYZER_BROADBAND
+uint PROC_MASK = 0x00;
+uint SYS_MASK = 0x00;
+#else
+uint PROC_MASK = 0x1E;
+uint SYS_MASK = 0x1F;
+#endif
 
 #define MAX(x,y) ((x>y)?x:y)
 
@@ -158,11 +185,11 @@ long totalTimeElapsed_sec = 0;
 char strTime[80];
 list<string>  exclude_process_list;
 list<string> :: iterator it;
-#ifdef PROCANALYZER_EXTENDER 
+#ifdef PROCANALYZER_EXTENDER
 // Get the Log level
-char* GetCurTimeStamp(); 
+char* GetCurTimeStamp();
 void get_proclog(int log_level,const char * log_module ,const char *format, ...)
- {
+{
      printf("%s\t",GetCurTimeStamp());
     if(log_level==0){
         printf("<ERROR>\t");
@@ -198,34 +225,36 @@ int get_device_param(char* param,char* value)
     }
     fgets(buf1, BUFF_SIZE_64, fp);
     sscanf(buf1,"        \"%[^'\"''']\": \"%[^'\"']\"",tmp_string,value);
+    pclose(fp);
     return 1;
 }
 #endif
+
 char* removespaces(char *str);
 int read_config_param(const char *paramname,const char *filename,char *res)
 {
-   FILE *fp = fopen(filename,"r");
-        char tmp_string[128];
-        char* tmp;
-        char* pch;
-        if(fp)
+    FILE *fp = fopen(filename,"r");
+    char tmp_string[128] = {0};
+    char* tmp;
+    char* pch;
+    if(fp)
+    {
+        memset(tmp_string,0,128);
+        while(fgets(tmp_string,128,fp)!= NULL)
         {
-            memset(tmp_string,0,128);
-            while(fgets(tmp_string,128,fp)!= NULL)
+            if(strstr(tmp_string,paramname))
             {
-                if(strstr(tmp_string,paramname))
-                {
-                  tmp=removespaces(tmp_string);
-                  pch=strchr(tmp,'=');
-                  pch=pch+1;
-                  strncpy(res,pch,BUFF_SIZE_16);
-                  return 1;
-                }
-                memset(tmp_string,0,128);
+                tmp=removespaces(tmp_string);
+                pch=strchr(tmp,'=');
+                pch=pch+1;
+                strncpy(res,pch,BUFF_SIZE_64);
+                return 1;
             }
-            fclose(fp);
+            memset(tmp_string,0,128);
         }
-        return 0;
+        fclose(fp);
+    }
+    return 0;
 }
 
 char* removespaces(char *str)
@@ -329,10 +358,70 @@ char* GetValuesFromFile (char *fname, char *searchStr, char *strValue, unsigned 
             break;
         }
     }
-    pclose(fp);
+    fclose(fp);
     return strValue;
 }
 
+#if defined  PROCANALYZER_BROADBAND
+void ReadRFCJson()
+{
+    string rfc_filename = outputDir + "rfc_list.txt";
+    static const char filename[] = "/tmp/rfc-current.json";
+
+    if(access(filename, R_OK))
+    {
+        RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "rfc-current.json is not accessible.\n");
+        return;
+    }
+
+    FILE *fp1 = fopen(rfc_filename.c_str(),"a");
+    struct json_object *obj, *feature_obj, *feaCtrl_obj, *featArr_obj, *name_obj, *enable_obj;
+
+    obj = json_object_from_file(filename);
+    feaCtrl_obj = json_object_object_get(obj, "featureControl");
+    feature_obj = json_object_object_get(feaCtrl_obj, "features");
+
+    int arrlen = json_object_array_length(feature_obj);
+
+    if(fp1)
+    {
+        for(int i=0; i<arrlen; i++)
+        {
+            featArr_obj = json_object_array_get_idx(feature_obj, i);
+            name_obj = json_object_object_get(featArr_obj, "name");
+            enable_obj = json_object_object_get(featArr_obj, "enable");
+            fprintf(fp1, "%s : %s\n", json_object_get_string(name_obj), json_object_get_string(enable_obj));
+        }
+        fclose(fp1);
+    }
+    else
+    {
+        RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "Cannot open RFC file.\n");
+    }
+    json_object_put(obj);
+}
+#endif
+
+void GetNumOfClientsConnected(unsigned int *cliCount)
+{
+    char buf[8] = {0};
+    FILE *fp = NULL;
+
+    fp = popen("dmcli eRT getv Device.Hosts.HostNumberOfEntries | grep value | awk '{print $5}'", "r");
+    if(fp)
+    {
+        if(fgets(buf, 8, fp))
+        {
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "Number of Clients connected : %d\n", atoi(buf));
+            *cliCount = atoi(buf);
+        }
+        pclose(fp);
+    }
+    else
+    {
+        RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "Popen failure\n");
+    }
+}
 
 /**
  * @brief This function retrieves device name and manufacturer name.
@@ -691,6 +780,7 @@ void GetIdlePercent(float* idlePercent)
         prevCPUInfo.total = currentCPUInfo.total;
         prevCPUInfo.idle = currentCPUInfo.idle;
     }
+    fclose(fp);
 }
 
 /**
@@ -715,7 +805,109 @@ void CreateExclusionList()
         memset(buf1,0,sizeof(buf1));
     }
     pclose(fp);
-    exclude_process_list.push_back("cpuprocanalyzer");
+    //exclude_process_list.push_back("cpuprocanalyzer");
+}
+
+/**
+ * @brief This function gives information about the File Descriptors in process.
+ *
+ * @param[in] d_pid         PID of process
+ * @param[in] FDCount       File Descriptor in process
+ */
+void GetFDCount(char* filename, int* FDCount)
+
+{
+    FILE * fp = popen( filename, "r" );
+
+    if ( fp == 0 )
+    {
+        RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","Could not get FD Count\n");
+    }
+    else
+    {
+        fscanf(fp, "%d" , FDCount);
+        pclose(fp);
+    }
+}
+
+/**
+ * @brief This function gives information about the File Descriptors at system level.
+ *
+ * @param[in] FDCountSystem File Descriptors at system level
+*/
+
+void GetFDCountSystem(int* FDCountSystem)
+
+{
+    char tmp_string[64] = {0};
+    snprintf(tmp_string, sizeof(tmp_string), "/proc/sys/fs/file-nr" );
+    FILE * fp = fopen( tmp_string, "r" );
+
+    if ( fp == 0 )
+    {
+        RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","Could not get FD Count System Level\n");
+    }
+    else
+    {
+        fscanf(fp, "%d" , FDCountSystem);
+        fclose(fp);
+    }
+}
+
+/**
+ * @brief This is to set the bit mask for System/Process.
+*/
+
+uint SetMask(char* res)
+{
+    uint bit_mask = 0x00;
+    RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Input param = %s, strlen(res) = %d, sizeof() = %d\n",
+                           res, strlen(res), sizeof(res));
+
+    char *newline = strchr( res, '\n' );
+    if ( newline )
+    {
+        *newline = '\0';
+    }
+
+    char *token = strtok(res, ",");
+    while(token != NULL)
+    {
+        RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Token = %s, Strlen = %d, sizeof() = %d\n", token, strlen(token), sizeof(token));
+        if(strncmp(token,"cpu",strlen(token)) == 0)
+        {
+            bit_mask |= CPU_MASK;
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Cpu mask is set : %d\n", bit_mask);
+        }
+        else if(strncmp(token,"memory",strlen(token)) == 0)
+        {
+            bit_mask |= MEMORY_MASK;
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Memory mask is set : %d\n", bit_mask);
+        }
+        else if(strncmp(token,"fd",strlen(token)) == 0)
+        {
+            bit_mask |= FDCOUNT_MASK;
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","FD mask is set : %d\n", bit_mask);
+        }
+        else if(strncmp(token,"loadavg",strlen(token)) == 0)
+        {
+            bit_mask |= LOADAVG_MASK;
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","LoadAvg mask is set : %d\n", bit_mask);
+        }
+        else if(strncmp(token,"thread",strlen(token)) == 0)
+        {
+            bit_mask |= THREADCOUNT_MASK;
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Thread mask is set : %d\n", bit_mask);
+        }
+        else if(strncmp(token,"cliconnected",strlen(token)) == 0)
+        {
+            bit_mask |= CLICOUNT_MASK;
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Cli count mask is set : %d\n", bit_mask);
+        }
+        token = strtok(NULL, ",");
+        RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","token is : %s\n", token);
+    }
+    return bit_mask;
 }
 
 /**
@@ -728,13 +920,14 @@ void CreateExclusionList()
  * @param[in] pname         Parent Name
  * @param[in] is_dynamic    Flag to check dynamically created process.
  */
-int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=0)
+int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=0, bool telemetryOnly=0)
 {
     char tmp_string[1024] = {0};
     unsigned long vmStack=0;
     unsigned long vmSize=0;
     unsigned long vmRSS=0;
     int return_val;
+    int FDCount=0;
     string searchstr = ".sh";
     string s;
     memset(tmp_string,0,1024);
@@ -784,11 +977,21 @@ int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=
         }
     }
 
-    (ppid != 0) ? sprintf(tmp_string, "/proc/%d/task/%d/status", ppid, procData->d_pid)
-    : sprintf(tmp_string, "/proc/%d/status", procData->d_pid);
-    GetMemParams(tmp_string, &vmStack, "VmStk:");
-    GetMemParams(tmp_string, &vmSize, "VmSize:");
-    GetMemParams(tmp_string, &vmRSS, "VmRSS:");
+    if(PROC_MASK & MEMORY_MASK)
+    {
+       (ppid != 0) ? sprintf(tmp_string, "/proc/%d/task/%d/status", ppid, procData->d_pid)
+       : sprintf(tmp_string, "/proc/%d/status", procData->d_pid);
+       GetMemParams(tmp_string, &vmStack, "VmStk:");
+       GetMemParams(tmp_string, &vmSize, "VmSize:");
+       GetMemParams(tmp_string, &vmRSS, "VmRSS:");
+    }
+    if(PROC_MASK & FDCOUNT_MASK)
+    {
+       (ppid != 0) ? snprintf(tmp_string, sizeof(tmp_string), "ls /proc/%d/task/%d/fd | wc -l", ppid, procData->d_pid)
+       : snprintf(tmp_string, sizeof(tmp_string), "ls /proc/%d/fd | wc -l", procData->d_pid);
+       GetFDCount(tmp_string, &FDCount);
+    }
+
 
     /*
       Possible cases from /proc/<pid>/cmdline that confirms a script running
@@ -847,7 +1050,6 @@ int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=
     mkdir(tmp_string, S_IRWXU | S_IRWXG | S_IRWXO);
     (ppid != 0) ? procData->OutFilename(tmp_string, ppid, pname) : procData->OutFilename(tmp_string,is_dynamic);
     fp_dataOut = fopen(tmp_string, "a+");
-
     if(fp_dataOut)
     {
         unsigned long currentTotalUsedCPUTime = 0;
@@ -888,9 +1090,37 @@ int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=
             {
                 ReadSkippingRandomChar(fp_cmd, tmp_string);
                 fclose(fp_cmd);
+
+                if(telemetryOnly == false)
+                {
                 fprintf(fp_dataOut, "Command-Line : %s\n\n", tmp_string);
-                fprintf(fp_dataOut, "El-Time\tTimeStamp\t\tCPU%\tCPU%:U\tCPU%:S\tMjrFlts\tVmSize\tVmRSS\tVmStk\n");
+                if(PROC_MASK)
+                {
+                    fprintf(fp_dataOut, "El-Time\tTimeStamp\t");
+                    if(PROC_MASK & CPU_MASK)
+                    {
+                       fprintf(fp_dataOut, "\tCPU%\tCPU%:U\tCPU%:S\tMjrFlts");
+                    }
+                    if(PROC_MASK & MEMORY_MASK)
+                    {
+                       fprintf(fp_dataOut, "\tVmSize\tVmRSS\tVmStk");
+                    }
+                    if(PROC_MASK & THREADCOUNT_MASK)
+                    {
+                       fprintf(fp_dataOut, "\tThreadCount");
+                    }
+                    if(PROC_MASK & FDCOUNT_MASK)
+                    {
+                       fprintf(fp_dataOut, "\tFDCount");
+                    }
+                    fprintf(fp_dataOut, "\n");
+                }
+                else
+                {
+                   fprintf(fp_dataOut, "El-Time\tTimeStamp\t\tCPU%\tCPU%:U\tCPU%:S\tMjrFlts\tVmSize\tVmRSS\tVmStk\tThreadCount\tFDCount\n");
+                }
             }
+        }
         }
 
        if(is_dynamic ==1 )
@@ -906,22 +1136,101 @@ int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=
                 cpuUseRaise= procData->lu_utime + procData->lu_stime;
                 cpuUseRaise_User = procData->lu_utime;
                 cpuUseRaise_System = procData->lu_stime;
-                fprintf(fp_dataOut, "%ld\t%s\t%0.2lf\t%0.2lf\t%0.2lf\t%d\t%ld\t%ld\t%ld\t\n", totalTimeElapsed_sec, GetCurTimeStamp(), cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise, vmSize, vmRSS, vmStack);
-                RDK_LOG(RDK_LOG_TRACE1, "LOG.RDK.CPUPROCANALYZER", "%s(%d): %0.2lf %0.2lf %0.2lf %d %ld %ld %ld \n", __func__, __LINE__, cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise, vmSize, vmRSS, vmStack);
+
+                if(telemetryOnly == false)
+                {
+                if(PROC_MASK)
+                {
+                    fprintf(fp_dataOut, "%ld\t%s", totalTimeElapsed_sec, GetCurTimeStamp());
+                    if(PROC_MASK & CPU_MASK)
+                    {
+                      fprintf(fp_dataOut, "\t%0.2lf\t%0.2lf\t%0.2lf\t%d", cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise);
+                      RDK_LOG(RDK_LOG_TRACE1, "LOG.RDK.CPUPROCANALYZER", "%s(%d): %0.2lf %0.2lf %0.2lf %d \n", __func__, __LINE__, cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise);
+                    }
+                    if(PROC_MASK & MEMORY_MASK)
+                    {
+                       fprintf(fp_dataOut, "\t%ld\t%ld\t%ld", vmSize, vmRSS, vmStack);
+                       RDK_LOG(RDK_LOG_TRACE1, "LOG.RDK.CPUPROCANALYZER", "%s(%d): %ld %ld %ld \n", __func__, __LINE__, vmSize, vmRSS, vmStack);
+                    }
+                    if(PROC_MASK & THREADCOUNT_MASK)
+                    {
+                      fprintf(fp_dataOut, "\t%ld\t", ((procData->ld_num_threads)-1));
+                      RDK_LOG(RDK_LOG_TRACE1, "LOG.RDK.CPUPROCANALYZER", "%s(%d): %ld \n", __func__, __LINE__, ((procData->ld_num_threads)-1));
+                    }
+                    if(PROC_MASK & FDCOUNT_MASK)
+                    {
+                       fprintf(fp_dataOut, "\t%d\t", FDCount);
+                       RDK_LOG(RDK_LOG_TRACE1, "LOG.RDK.CPUPROCANALYZER", "%s(%d): %d \n", __func__, __LINE__, FDCount);
+                    }
+                    fprintf(fp_dataOut, "\n");
+                }
+                else
+                {
+                   fprintf(fp_dataOut, "%ld\t%s\t%0.2lf\t%0.2lf\t%0.2lf\t%d\t%ld\t%ld\t%ld\t%ld\t\t%d\t\n", totalTimeElapsed_sec, GetCurTimeStamp(), cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise, vmSize, vmRSS, vmStack, ((procData->ld_num_threads)-1), FDCount);
+                   RDK_LOG(RDK_LOG_TRACE1, "LOG.RDK.CPUPROCANALYZER", "%s(%d): %0.2lf %0.2lf %0.2lf %d %ld %ld %ld %ld %d \n", __func__, __LINE__, cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise, vmSize, vmRSS, vmStack, ((procData->ld_num_threads)-1), FDCount);
+                }
+            }
             }
             fclose(f);
        }
 
        if(prevData[procData->d_pid].status)
        {
-           fprintf(fp_dataOut, "%ld\t%s\t%0.2lf\t%0.2lf\t%0.2lf\t%d\t%ld\t%ld\t%ld\t\n", totalTimeElapsed_sec, GetCurTimeStamp(), cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise, vmSize, vmRSS, vmStack);
-           RDK_LOG(RDK_LOG_TRACE1, "LOG.RDK.CPUPROCANALYZER","%s(%d): %0.2lf %0.2lf %0.2lf %d %ld %ld %ld \n", __func__, __LINE__, cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise, vmSize, vmRSS, vmStack);
+            if(telemetryOnly == false)
+            {
+            if(PROC_MASK)
+            {
+                fprintf(fp_dataOut, "%ld\t%s", totalTimeElapsed_sec, GetCurTimeStamp());
+                if(PROC_MASK & CPU_MASK)
+                {
+                   fprintf(fp_dataOut, "\t%0.2lf\t%0.2lf\t%0.2lf\t%d", cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise);
+                   RDK_LOG(RDK_LOG_TRACE1, "LOG.RDK.CPUPROCANALYZER", "%s(%d): %0.2lf %0.2lf %0.2lf %d \n", __func__, __LINE__, cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise);
+                }
+                if(PROC_MASK & MEMORY_MASK)
+                {
+                   fprintf(fp_dataOut, "\t%ld\t%ld\t%ld", vmSize, vmRSS, vmStack);
+                   RDK_LOG(RDK_LOG_TRACE1, "LOG.RDK.CPUPROCANALYZER", "%s(%d): %ld %ld %ld \n", __func__, __LINE__, vmSize, vmRSS, vmStack);
+                }
+                if(PROC_MASK & THREADCOUNT_MASK)
+                {
+                   fprintf(fp_dataOut, "\t%ld\t", ((procData->ld_num_threads)-1));
+                   RDK_LOG(RDK_LOG_TRACE1, "LOG.RDK.CPUPROCANALYZER", "%s(%d): %ld \n", __func__, __LINE__, ((procData->ld_num_threads)-1));
+                }
+                if(PROC_MASK & FDCOUNT_MASK)
+                {
+                   fprintf(fp_dataOut, "\t%d\t", FDCount);
+                   RDK_LOG(RDK_LOG_TRACE1, "LOG.RDK.CPUPROCANALYZER", "%s(%d): %d \n", __func__, __LINE__, FDCount);
+                }
+                fprintf(fp_dataOut, "\n");
+            }
+            else
+            {
+               fprintf(fp_dataOut, "%ld\t%s\t%0.2lf\t%0.2lf\t%0.2lf\t%d\t%ld\t%ld\t%ld\t%ld\t\t%d\t\n", totalTimeElapsed_sec, GetCurTimeStamp(), cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise, vmSize, vmRSS, vmStack, ((procData->ld_num_threads)-1), FDCount);
+               RDK_LOG(RDK_LOG_TRACE1, "LOG.RDK.CPUPROCANALYZER", "%s(%d): %0.2lf %0.2lf %0.2lf %d %ld %ld %ld %ld %d \n", __func__, __LINE__, cpuUseRaise, cpuUseRaise_User, cpuUseRaise_System, majorFaultsRaise, vmSize, vmRSS, vmStack, ((procData->ld_num_threads)-1), FDCount);
+            }
        }
-       fclose(fp_dataOut);
+       }
+           fclose(fp_dataOut);
+
+       #if defined  PROCANALYZER_BROADBAND
+       //Telemetry event send
+       if(ppid == 0)
+       {
+           char eventName[32]={'\0'};
+           char telemetry_buf[128] = {'\0'};
+           snprintf(eventName, sizeof(eventName), "CPA_INFO_%s", procData->s_comm);
+           snprintf(telemetry_buf, sizeof(telemetry_buf), "%ld,%0.2lf,%d,%d", vmRSS, cpuUseRaise, FDCount, procData->ld_num_threads-1);
+           RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Event : %s, Value : %s\n", eventName, telemetry_buf);
+           t2_event_s(eventName, telemetry_buf);
+       }
+       #endif
     }
     else
     {
-        RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","%s(%d): ERROR opening the file: %s\n", __func__, __LINE__, tmp_string);
+        if(telemetryOnly == false)
+        {
+           RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","%s(%d): ERROR opening the file: %s\n", __func__, __LINE__, tmp_string);
+        }
         return 0;
     }
 
@@ -1173,41 +1482,89 @@ int main(int argc, char** argv)
     else
         pEnvConfig = ENV_ACTUAL_PATH;
 
+    #if defined  PROCANALYZER_BROADBAND
+    t2_init("cpuprocanalyzer");
+    #endif
+
     char tmp_string[256]={0};
     unsigned long timeToRun_sec ;
     unsigned int sleepInterval_ms;
     unsigned long memoryLimit;
     bool monitorAllProcess = false;
     bool enableDynamic = true;
+    bool telemetryOnly = false;
     string grepProcesses;
     int env;
     char* ptr;
-    char res[32];
+    char res[64];
     string ps_filename = outputDir + "selectedps.list";
-    memset(res,0,32);
-    ((env=read_config_param("FEATURE.CPUPROCANALYZER.SLEEP.SECS",pEnvConfig,res)) == 0) ? sleepInterval_ms = SLEEP_SECS*1000 : sleepInterval_ms = strtol(res,&ptr,10)*1000;
-    memset(res,0,32);
-    ((env=read_config_param("FEATURE.CPUPROCANALYZER.TIMETORUN.SECS",pEnvConfig,res)) == 0) ? timeToRun_sec = TIME_TO_RUN_SECS : timeToRun_sec = strtol(res,&ptr,10);
-    memset(res,0,32);
-    ((env=read_config_param("FEATURE.CPUPROCANALYZER.DYNAMIC",pEnvConfig,res)) == 0) ? enableDynamic = DEFAULT_DYNAMIC : enableDynamic = res[0] - '0';
-    memset(res,0,32);
-    ((env=read_config_param("FEATURE.CPUPROCANALYZER.MONITORALLPROCESS",pEnvConfig,res)) == 0) ? monitorAllProcess = MONITOR_ALL_PROC_DEF : monitorAllProcess = res[0] - '0';
-    memset(res,0,32);
-    ((env=read_config_param("FEATURE.CPUPROCANALYZER.MEMORYLIMIT",pEnvConfig,res)) == 0) ? memoryLimit = DEFAULT_MEM_THRESHOLD : memoryLimit = strtol(res,&ptr,10);
+    memset(res,0,64);
+    ((env=read_config_param("FEATURE.CPUPROCANALYZER.SleepInterval",pEnvConfig,res)) == 0) ? sleepInterval_ms = SLEEP_SECS*1000 : sleepInterval_ms = strtol(res,&ptr,10)*1000;
+    memset(res,0,64);
+    ((env=read_config_param("FEATURE.CPUPROCANALYZER.TimeToRun",pEnvConfig,res)) == 0) ? timeToRun_sec = TIME_TO_RUN_SECS : timeToRun_sec = strtol(res,&ptr,10);
+    memset(res,0,64);
+    ((env=read_config_param("FEATURE.CPUPROCANALYZER.DynamicProcess",pEnvConfig,res)) == 0) ? enableDynamic = DEFAULT_DYNAMIC : enableDynamic = res[0] - '0';
+    memset(res,0,64);
+    ((env=read_config_param("FEATURE.CPUPROCANALYZER.MonitorAllProcess",pEnvConfig,res)) == 0) ? monitorAllProcess = MONITOR_ALL_PROC_DEF : monitorAllProcess = res[0] - '0';
+    memset(res,0,64);
+    ((env=read_config_param("FEATURE.CPUPROCANALYZER.TelemetryOnly",pEnvConfig,res)) == 0) ? telemetryOnly = TELEMETRY_ONLY_DEF : telemetryOnly = res[0] - '0';
+    memset(res,0,64);
+    ((env=read_config_param("FEATURE.CPUPROCANALYZER.MemoryLimit",pEnvConfig,res)) == 0) ? memoryLimit = DEFAULT_MEM_THRESHOLD : memoryLimit = strtol(res,&ptr,10);
     RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","%s(%d):\nSleep Interval(secs): %d\nTime To Run(secs): %ld\n", __func__, __LINE__, sleepInterval_ms/1000, timeToRun_sec);
-    RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Monitor All Process = %d, MemLimit = %ld\nDynamic = %d\n", monitorAllProcess, memoryLimit, enableDynamic);
+    RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Monitor All Process = %d, MemLimit = %ld\nDynamic = %d\ntelemetryOnly = %d\n", monitorAllProcess, memoryLimit, enableDynamic, telemetryOnly);
 
-    //Clearing the contents of the output directory before running the tool
-    sprintf(tmp_string, "cd %s && rm -rf *", outputDir.c_str());
-    system(tmp_string);
-    mkdir(outputDir.c_str(), S_IRWXU | S_IRWXG | S_IRWXO);
-    mkdir(outputDynamicDir.c_str(), S_IRWXU | S_IRWXG | S_IRWXO);
-    ReadDeviceName();
-    CreateExclusionList();
+        #if defined  PROCANALYZER_BROADBAND
+        memset(res,0,64);
+        if((read_config_param("FEATURE.CPUPROCANALYZER.SystemStatsToMonitor",pEnvConfig,res)) == 0)
+        {
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","SYSStats config absent, res value = %s\n", res);
+            SYS_MASK = SYS_DEF_MASK;
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","SYSStats config absent, set to DEF MASK = %d\n", SYS_MASK);
+        }
+        else
+        {
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","SYSStats config present, res value = %s\n", res);
+            SYS_MASK = SetMask(res);
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","SYS MASK is set\n");
+        }
 
+        memset(res,0,64);
+        if((read_config_param("FEATURE.CPUPROCANALYZER.ProcessStatsToMonitor",pEnvConfig,res)) == 0)
+        {
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","PROCStats config absent, res value = %s\n", res);
+            PROC_MASK = PROC_DEF_MASK;
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","PROCStats Config absent, set to DEF MASK = %d\n", PROC_MASK);
+        }
+        else
+        {
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","PROCStats config present, res value = %s\n", res);
+            PROC_MASK = SetMask(res);
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","PROC MASK is set\n");
+        }
+        #endif
+
+        //Clearing the contents of the output directory before running the tool
+        sprintf(tmp_string, "cd %s && rm -rf *", outputDir.c_str());
+        system(tmp_string);
+        RDK_LOG(RDK_LOG_DEBUG, "LOG.RDK.CPUPROCANALYZER","Create this directory always: %s\n", tmp_string);
+        mkdir(outputDir.c_str(), S_IRWXU | S_IRWXG | S_IRWXO);
+        if(telemetryOnly == false)
+        {
+            mkdir(outputDynamicDir.c_str(), S_IRWXU | S_IRWXG | S_IRWXO);
+            RDK_LOG(RDK_LOG_DEBUG, "LOG.RDK.CPUPROCANALYZER","Creating if telemetryOnly false, outputDynamicDir.c_str()\n");
+        }
+        ReadDeviceName();
+        CreateExclusionList();
+
+        #if defined  PROCANALYZER_BROADBAND
+        if(telemetryOnly == false)
+        {
+            ReadRFCJson();
+        }
+        #endif
 
     char tmpstring[1024],tmpstring1[128];
-    char buf1[64],buf2[8];
+    char buf1[64],buf2[64];
     int val;
 
     unsigned long long startTime_sec = time(NULL);
@@ -1216,11 +1573,14 @@ int main(int argc, char** argv)
     bool terminate = false;
     stProcData procData, threadData;
 
+    unsigned int cliCount = 0;
     float loadAvg;
     unsigned long usedMemory;
     float idlePercent;
     bool firstIter = true;
     bool monitorSysLevel = false;
+    int FDCountSystem=0;
+
 
     if(enableDynamic) {
         returncode = pthread_create(&process_handler_tid,NULL,handle_proc_ev_thread,NULL);
@@ -1235,12 +1595,51 @@ int main(int argc, char** argv)
     {
         //Capture Load Average value
         FILE *fp;
-
-        GetIdlePercent(&idlePercent);
-        GetLoadAverage(&loadAvg);
-        GetUsedMemory(&usedMemory);
-
-        RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "%s(%d): Load: %0.2f Mem: %ld Idle: %0.2f\n", __func__, __LINE__, loadAvg, usedMemory, idlePercent);
+        RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Inside while.....\n");
+        if(telemetryOnly == false)
+        {
+        if(SYS_MASK)
+        {
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","SYS MASK NOT NULL, %d\n", SYS_MASK);
+            if(SYS_MASK & CPU_MASK)
+            {
+                GetIdlePercent(&idlePercent);
+                RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "%s(%d): Idle: %0.2f\n", __func__, __LINE__, idlePercent);
+            }
+            if(SYS_MASK & MEMORY_MASK)
+            {
+                GetUsedMemory(&usedMemory);
+                RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "%s(%d): Mem: %ld\n", __func__, __LINE__, usedMemory);
+            }
+            if(SYS_MASK & FDCOUNT_MASK)
+            {
+                GetFDCountSystem(&FDCountSystem);
+                RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "%s(%d): FDCountSystem: %d\n", __func__, __LINE__, FDCountSystem);
+            }
+            if(SYS_MASK & LOADAVG_MASK)
+            {
+                GetLoadAverage(&loadAvg);
+                RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "%s(%d): Load: %0.2f\n", __func__, __LINE__, loadAvg);
+            }
+            if(SYS_MASK & CLICOUNT_MASK)
+            {
+                GetNumOfClientsConnected(&cliCount);
+                RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "%s(%d): ClientCount: %d\n", __func__, __LINE__, cliCount);
+            }
+        }
+        else
+        {
+            RDK_LOG(RDK_LOG_DEBUG, "LOG.RDK.CPUPROCANALYZER","DEFAULT MASK is set\n");
+            GetIdlePercent(&idlePercent);
+            GetLoadAverage(&loadAvg);
+            GetUsedMemory(&usedMemory);
+            GetFDCountSystem(&FDCountSystem);
+            GetNumOfClientsConnected(&cliCount);
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "%s(%d): Load: %0.2f Mem: %ld \
+                                        Idle: %0.2f FDCountSystem: %d ClientCount = %d\n",
+                                        __func__, __LINE__, loadAvg, usedMemory, idlePercent,
+                                        FDCountSystem, cliCount);
+        }
 
         fp = fopen(LOG_PATH"/cpuprocanalyzer/loadandmem.data", "a+");
 
@@ -1248,14 +1647,77 @@ int main(int argc, char** argv)
         {
             if(firstIter)
             {
-                fprintf(fp, "TimeStamp\t\tLoadAvg\tUsedMem\tIdle%\n");
+                RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","First Iter = %d\n", firstIter);
+                if(SYS_MASK)
+                {
+                    RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","SYS_MASK NOT NULL, write data to loadandmem file\n");
+                    fprintf(fp, "TimeStamp\t\t");
+                    if(SYS_MASK & LOADAVG_MASK)
+                    {
+                        fprintf(fp, "LoadAvg\t");
+                    }
+                    if(SYS_MASK & MEMORY_MASK)
+                    {
+                        fprintf(fp, "UsedMem\t");
+                    }
+                    if(SYS_MASK & CPU_MASK)
+                    {
+                        fprintf(fp, "Idle%\t");
+                    }
+                    if(SYS_MASK & FDCOUNT_MASK)
+                    {
+                        fprintf(fp, "FDCountSystem\t");
+                    }
+                    if(SYS_MASK & CLICOUNT_MASK)
+                    {
+                        fprintf(fp, "ClientCount\t");
+                    }
+                    fprintf(fp, "\n");
+                }
+                else
+                {
+                     fprintf(fp, "TimeStamp\t\tLoadAvg\tUsedMem\tIdle%\tFDCountSystem\tClientCount\n");
+                }
+
                 firstIter = false;
             }
-            fprintf(fp, "%s\t%0.2f\t%ld\t%0.2f\n", GetCurTimeStamp(), loadAvg, usedMemory, idlePercent);
+
+            if(SYS_MASK)
+            {
+                RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Start printing values to loadandmem file\n");
+                fprintf(fp, "%s", GetCurTimeStamp());
+                if(SYS_MASK & LOADAVG_MASK)
+                {
+                    fprintf(fp, "\t%0.2f", loadAvg);
+                }
+                if(SYS_MASK & MEMORY_MASK)
+                {
+                   fprintf(fp, "\t%ld", usedMemory);
+                }
+                if(SYS_MASK & CPU_MASK)
+                {
+                   fprintf(fp, "\t%0.2f", idlePercent);
+                }
+                if(SYS_MASK & FDCOUNT_MASK)
+                {
+                    fprintf(fp, "\t%d", FDCountSystem);
+                }
+                if(SYS_MASK & CLICOUNT_MASK)
+                {
+                    fprintf(fp, "\t\t%d", cliCount);
+                }
+                fprintf(fp, "\n");
+            }
+            else
+            {
+                fprintf(fp, "%s\t%0.2f\t%ld\t%0.2f\t%d\t\t%d\n", GetCurTimeStamp(),
+                             loadAvg, usedMemory, idlePercent, FDCountSystem, cliCount);
+            }
             fclose(fp);
         }
         else
             RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER", "%s(%d):ERROR opening loadandmem.data file\n", __func__, __LINE__);
+        }
 
         if(monitorAllProcess == true)
         {
@@ -1281,27 +1743,39 @@ int main(int argc, char** argv)
               fp = fopen(PROCESSES_LIST_PATH, "r");
               if (fp)
               {
+                 RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Read from process list and populate Selected ps file\n");
                  memset(buf1,0,64);
-                 memset(buf2,0,8);
+                 memset(buf2,0,64);
                  while (fgets(buf1,64,fp)!= NULL)
                  {
                     sprintf(tmpstring1,"pidof %s",buf1);
                     FILE *ptr2 = popen(tmpstring1,"r");
-                    while (fscanf(ptr2,"%s",buf2) != EOF)
+                    if (ptr2)
                     {
-                        fprintf(ptr1,"%s\n",buf2);
-                        memset(buf2,0,8);
+                        while (fscanf(ptr2,"%s",buf2) != EOF)
+                        {
+                            fprintf(ptr1,"%s\n",buf2);
+                            memset(buf2,0,64);
+                        }
+                        pclose(ptr2);
+                    } else {
+                        RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "%s(%d): Popen failure for process, %s\n", __func__, __LINE__, buf1);
                     }
                     memset(buf1,0,64);
                  }
                  fclose (fp);
+              } else {
+                  RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER", "%s(%d): Process file open failure\n", __func__, __LINE__);
               }
               fclose(ptr1);
            }
            else
            {
-              RDK_LOG(RDK_LOG_ERROR,"LOG.RDK.CPUPROCANALYZER"," Error opening the file: %s",ps_filename.c_str());
-              continue;
+              if(telemetryOnly == false)
+              {
+                  RDK_LOG(RDK_LOG_ERROR,"LOG.RDK.CPUPROCANALYZER"," Error opening the file: %s",ps_filename.c_str());
+                  continue;
+              }
            }
         }
         else
@@ -1322,13 +1796,16 @@ int main(int argc, char** argv)
                        break;
                    sscanf(tmp_string, "%d", &procData.d_pid);
                    pthread_mutex_lock(&mtx);
-                   if(!LogProcData(&procData))
+                   RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Calling LogProcData\n");
+                   if(!LogProcData(&procData,0,"",0,telemetryOnly))
                    {
                        pthread_mutex_unlock(&mtx);
                        continue;
                    }
                    pCount++;
                    pthread_mutex_unlock(&mtx);
+                   if(telemetryOnly == false)
+                   {
                    sprintf(tmp_string, "ls /proc/%d/task/ > %s%d_%s/threads.list", procData.d_pid, outputDir.c_str(), procData.d_pid, procData.s_comm);
                    system(tmp_string);
                    sprintf(tmp_string, "%s%d_%s/threads.list", outputDir.c_str(), procData.d_pid, procData.s_comm);
@@ -1351,8 +1828,10 @@ int main(int argc, char** argv)
                        fclose(fp_thread_list);
                    }
                    memset(tmp_string,0,sizeof(tmp_string));
+                   }
                }
                fclose(fp_selectedps);
+               RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","MAP erase logic\n");
                map<unsigned int, struct stPrevData>::iterator it = prevData.begin();
                while(it != prevData.end())
                {
@@ -1369,7 +1848,10 @@ int main(int argc, char** argv)
            }
            else
            {
-               RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","%s(%d): ERROR opening the file: %s\n", __func__, __LINE__, ps_filename.c_str());
+               if(telemetryOnly == false)
+               {
+                   RDK_LOG(RDK_LOG_ERROR, "LOG.RDK.CPUPROCANALYZER","%s(%d): ERROR opening the file: %s\n", __func__, __LINE__, ps_filename.c_str());
+               }
            }
 
            RDK_LOG(RDK_LOG_INFO,"LOG.RDK.CPUPROCANALYZER", "[%d]No. of process monitored : %d\n\n", iteration, pCount);
@@ -1378,25 +1860,40 @@ int main(int argc, char** argv)
 
         if(timeToRun_sec)
         {
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Check time to run...\n");
             currentTime_sec = time(NULL);
             timeElapsed_sec = difftime(currentTime_sec, startTime_sec);
             if(timeElapsed_sec >= timeToRun_sec)
+            {
+               RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Time elapsed, Terminate = true\n");
                terminate = true;
+            }
         }
 
         if(!terminate)
         {
+            RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","Terminate NOT TRUE, sleep\n");
             usleep(sleepInterval_ms*1000);
             totalTimeElapsed_sec += sleepInterval_ms/1000;
         }
     }
+
     #if defined PROCANALYZER_BROADBAND
     RDK_LOG(RDK_LOG_INFO,"LOG.RDK.CPUPROCANALYZER", "Triggering RunCPUProcAnalyzer.sh stop...\n");
-    system("/lib/rdk/RunCPUProcAnalyzer.sh stop");
+    if (telemetryOnly == false)
+    {
+         system("/lib/rdk/RunCPUProcAnalyzer.sh stop 1");
+    }
+    else
+    {
+         system("/lib/rdk/RunCPUProcAnalyzer.sh stop 0");
+    }
+
     #elif  defined PROCANALYZER_EXTENDER
-     RDK_LOG(RDK_LOG_INFO,"LOG.RDK.CPUPROCANALYZER", "Stop CPU Proc Analyzer ...\n");
-     system("/usr/opensync/scripts/run_procanalyzer.sh stop");
+    RDK_LOG(RDK_LOG_INFO,"LOG.RDK.CPUPROCANALYZER", "Stop CPU Proc Analyzer ...\n");
+    system("/usr/opensync/scripts/run_procanalyzer.sh stop");
     #endif
+
     sleep(5);
     RDK_LOG(RDK_LOG_INFO, "LOG.RDK.CPUPROCANALYZER","%s(%d): ***Exiting the application***\n", __func__, __LINE__);
     return 0;

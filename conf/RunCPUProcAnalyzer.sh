@@ -24,6 +24,7 @@ if [ $# -lt 1 ]; then
 fi
 
 arg_val=$1
+NeedUpload=$2
 case $arg_val in
         start)
             if [ "$BOX_TYPE" = "XB3" ]; then
@@ -34,21 +35,27 @@ case $arg_val in
             exit 0
         ;;
         stop)
-            MAC=`getMacAddressOnly`
-            dt=`date "+%m-%d-%y-%I-%M%p"`
-            echo "*.tgz" > $PATTERN_FILE   # .tgz should be excluded while tar
-            mkdir /tmp/$dt
-            tar -X $PATTERN_FILE -cvzf /tmp/$dt/$MAC"_CPAstats_"$dt".tgz" /tmp/cpuprocanalyzer
-            rm $PATTERN_FILE
-            sleep 1
-            chmod 777 -R /tmp/$dt
-            /rdklogger/uploadRDKBLogs.sh "" HTTP "" false "" /tmp/$dt
-            sleep 1;
+            if [ "$NeedUpload" -eq 1 ]; then
+                 MAC=`getMacAddressOnly`
+                 dt=`date "+%m-%d-%y-%I-%M%p"`
+                 echo "*.tgz" > $PATTERN_FILE   # .tgz should be excluded while tar
+                 mkdir /tmp/$dt
+                 tar -X $PATTERN_FILE -cvzf /tmp/$dt/$MAC"_CPAstats_"$dt".tgz" /tmp/cpuprocanalyzer
+                 rm $PATTERN_FILE
+                 sleep 1
+                 chmod 777 -R /tmp/$dt
+                 /rdklogger/uploadRDKBLogs.sh "" HTTP "" false "" /tmp/$dt
+                 sleep 1;
+            fi
+
             rm -rf /tmp/cpuprocanalyzer
             if [ "$BOX_TYPE" != "XB3" ]; then
-            rm -rf /tmp/PROC_ANALYZER_ENABLE
+                 rm -rf /tmp/PROC_ANALYZER_ENABLE
             fi
-            rm -rf /tmp/$dt
+
+	    if [ "$NeedUpload" -eq 1 ]; then
+                 rm -rf /tmp/$dt
+	    fi
             exit 0
         ;;
         *)

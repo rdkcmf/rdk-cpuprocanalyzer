@@ -25,10 +25,11 @@ cpuprocanalyzer_SOURCES = cpuproc_analyzer.cpp
 if PROCANALYZER_EXTENDER
 AM_LDFLAGS = -lpthread
 AM_CXXFLAGS = -DPROCANALYZER_EXTENDER
-else 
+else
 AM_LDFLAGS = -lpthread -lrdkloggers 
 
 if PROCANALYZER_BROADBAND
+AM_LDFLAGS += -ltelemetry_msgsender -ljson-c
 AM_CXXFLAGS = -DPROCANALYZER_BROADBAND
 endif
 endif
