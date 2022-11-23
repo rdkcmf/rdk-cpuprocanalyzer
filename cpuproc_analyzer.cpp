@@ -928,7 +928,8 @@ int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=
     unsigned long vmRSS=0;
     int return_val;
     int FDCount=0;
-    string searchstr = ".sh";
+    string searchstr   = ".sh";
+    string searchstr_1 = "kworker";
     string s;
     memset(tmp_string,0,1024);
     (ppid != 0) ? sprintf(tmp_string, "/proc/%d/task/%d/stat", ppid, procData->d_pid)
@@ -1009,9 +1010,11 @@ int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=
         fgets(tmp_string, sizeof(tmp_string), fp_cmd);
         fclose(fp_cmd);
 
-        if ( (strncmp(tmp_string,"/bin/sh",strlen(tmp_string)) == 0) || (strncmp(tmp_string,"sh",strlen(tmp_string)) ==0 )
-              || (strncmp(tmp_string,"-sh",strlen(tmp_string)) == 0) || (strncmp(tmp_string,"-bash",strlen(tmp_string)) == 0)
-              || (strncmp(tmp_string,"/bin/bash",strlen(tmp_string)) == 0) )
+        if ( (strncmp(tmp_string,"/bin/sh",strlen(tmp_string)) == 0) ||
+             (strncmp(tmp_string,"sh",strlen(tmp_string)) ==0 ) ||
+             (strncmp(tmp_string,"-sh",strlen(tmp_string)) == 0) ||
+             (strncmp(tmp_string,"-bash",strlen(tmp_string)) == 0) ||
+             (strncmp(tmp_string,"/bin/bash",strlen(tmp_string)) == 0) )
         {
             RDK_LOG(RDK_LOG_DEBUG, "LOG.RDK.CPUPROCANALYZER","Rejecting process : %s\n", procData->s_comm);
             return 0;
@@ -1028,6 +1031,19 @@ int LogProcData(stProcData* procData, int ppid=0, char* pname="",int is_dynamic=
                     return 0;
                 }
             }
+        }
+    }
+
+    /*  Reject kworker_threads  */
+    sprintf(tmp_string, "/proc/%d/comm", procData->d_pid);
+    fp_cmd = fopen(tmp_string, "r");
+    if(fp_cmd)
+    {
+        fgets(tmp_string, sizeof(tmp_string), fp_cmd);
+        fclose(fp_cmd);
+        if( strstr(tmp_string,searchstr_1.c_str()) )
+        {
+            return 0;
         }
     }
 
@@ -1347,9 +1363,9 @@ static int handle_process_events(int netlink_sock)
                     netlink_msg.process_event.event_data.fork.child_pid,
                     netlink_msg.process_event.event_data.fork.child_tgid);
             dProcData.d_pid = netlink_msg.process_event.event_data.fork.child_pid;
-             pthread_mutex_lock(&mtx);
-             LogProcData(&dProcData,0,"",1);
-             pthread_mutex_unlock(&mtx);
+            pthread_mutex_lock(&mtx);
+            LogProcData(&dProcData,0,"",1);
+            pthread_mutex_unlock(&mtx);
             break;
        // Received an exec event from netlink socket
         case PROC_EVENT_EXEC:
